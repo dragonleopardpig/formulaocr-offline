@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "formulaocr-offline"
+version = "0.1.0"
+description = "Fully offline formula-image to LaTeX recognition"
+readme = "README.md"
+requires-python = ">=3.10,<3.14"
+license = "MIT"
+authors = [{ name = "dragonleopardpig" }]
+dependencies = [
+  "numpy>=1.26",
+  "pillow>=10",
+]
+
+[project.optional-dependencies]
+runtime = [
+  "ftfy>=6.3",
+  "opencv-contrib-python>=4.10",
+  "paddleocr>=3.4,<4",
+  "paddlepaddle>=3.3,<4",
+  "pypdfium2>=4",
+  "tokenizers>=0.19",
+]
+dev = ["pytest>=8", "ruff>=0.11"]
+
+[project.scripts]
+formulaocr-offline = "formulaocr_offline.cli:main"
+
+[project.urls]
+Repository = "https://github.com/dragonleopardpig/formulaocr-offline"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["B", "E", "F", "I", "W"]

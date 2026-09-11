@@ -1,0 +1,36 @@
+diff --git a/paddlex/inference/utils/official_models.py b/paddlex/inference/utils/official_models.py
+index 918065e..a124e43 100644
+--- a/paddlex/inference/utils/official_models.py
++++ b/paddlex/inference/utils/official_models.py
+@@ -25,8 +25,28 @@ import requests
+ 
+ os.environ["AISTUDIO_LOG"] = "critical"
+-import modelscope
+-from aistudio_sdk.errors import NotExistError
+-from aistudio_sdk.snapshot_download import snapshot_download as aistudio_download
++try:
++    import modelscope
++except ImportError:
++    class _DisabledModelScope:
++        @staticmethod
++        def snapshot_download(*args, **kwargs):
++            raise RuntimeError(
++                "ModelScope downloads are disabled in the offline Nix package"
++            )
++
++    modelscope = _DisabledModelScope()
++
++try:
++    from aistudio_sdk.errors import NotExistError
++    from aistudio_sdk.snapshot_download import snapshot_download as aistudio_download
++except ImportError:
++    class NotExistError(Exception):
++        pass
++
++    def aistudio_download(*args, **kwargs):
++        raise RuntimeError(
++            "AI Studio downloads are disabled in the offline Nix package"
++        )
+ 
+ from ...utils import logging
+ 
