@@ -36,7 +36,7 @@ formulaocr-offline --worker                    # newline-delimited JSON mode
     inputs.nixpkgs.follows = "nixpkgs";
   };
 
-  outputs = { formulaocr-offline, ... }: {
+  outputs = { formulaocr-offline, nixpkgs, ... }: {
     nixosConfigurations.my-host = nixpkgs.lib.nixosSystem {
       modules = [ formulaocr-offline.nixosModules.default ];
     };
