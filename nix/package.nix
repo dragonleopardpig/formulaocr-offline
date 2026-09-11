@@ -21,7 +21,14 @@ let
             "modelscope"
           ])
         ) old.dependencies;
-        patches = (old.patches or [ ]) ++ [ ./paddlex-no-aistudio.patch ];
+        patches = (old.patches or [ ]) ++ [
+          (
+            if lib.versionAtLeast old.version "3.7" then
+              ./paddlex-no-aistudio.patch
+            else
+              ./paddlex-3.4-no-network-clients.patch
+          )
+        ];
       });
     };
   };
@@ -47,7 +54,7 @@ let
 in
 stdenvNoCC.mkDerivation {
   pname = "formulaocr-offline";
-  version = "0.1.0";
+  version = "0.1.1";
   src = source;
 
   nativeBuildInputs = [ makeWrapper ];

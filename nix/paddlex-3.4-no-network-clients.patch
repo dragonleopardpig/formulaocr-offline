@@ -1,0 +1,34 @@
+diff --git a/paddlex/inference/utils/official_models.py b/paddlex/inference/utils/official_models.py
+--- a/paddlex/inference/utils/official_models.py
++++ b/paddlex/inference/utils/official_models.py
+@@ -22,11 +22,28 @@ import huggingface_hub as hf_hub
+ 
+ hf_hub.logging.set_verbosity_error()
+ 
+-import modelscope
+ import requests
+ 
+ os.environ["AISTUDIO_LOG"] = "critical"
+-from aistudio_sdk.snapshot_download import snapshot_download as aistudio_download
++try:
++    import modelscope
++except ImportError:
++    class _DisabledModelScope:
++        @staticmethod
++        def snapshot_download(*args, **kwargs):
++            raise RuntimeError(
++                "ModelScope downloads are disabled in the offline Nix package"
++            )
++
++    modelscope = _DisabledModelScope()
++
++try:
++    from aistudio_sdk.snapshot_download import snapshot_download as aistudio_download
++except ImportError:
++    def aistudio_download(*args, **kwargs):
++        raise RuntimeError(
++            "AI Studio downloads are disabled in the offline Nix package"
++        )
+ 
+ from ...utils import logging
+ from ...utils.cache import CACHE_DIR

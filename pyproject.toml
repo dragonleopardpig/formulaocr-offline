@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "formulaocr-offline"
-version = "0.1.0"
+version = "0.1.1"
 description = "Fully offline formula-image to LaTeX recognition"
 readme = "README.md"
 requires-python = ">=3.10,<3.14"
