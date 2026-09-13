@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "formulaocr-offline"
-version = "0.1.1"
+version = "0.1.2"
 description = "Fully offline formula-image to LaTeX recognition"
 readme = "README.md"
 requires-python = ">=3.10,<3.14"
@@ -31,6 +31,9 @@ formulaocr-offline = "formulaocr_offline.cli:main"
 
 [project.urls]
 Repository = "https://github.com/dragonleopardpig/formulaocr-offline"
+
+[tool.setuptools.packages.find]
+include = ["formulaocr_offline*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
