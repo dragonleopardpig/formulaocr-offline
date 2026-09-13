@@ -44,6 +44,14 @@ def test_formula_classifier():
     assert looks_like_formula(formula)
 
 
+def test_formula_classifier_tolerates_capture_border():
+    formula = Image.new("RGB", (290, 106), (246, 247, 245))
+    draw = ImageDraw.Draw(formula)
+    draw.rectangle((0, 0, 289, 105), outline=(93, 93, 92))
+    draw.rectangle((40, 40, 250, 65), fill="black")
+    assert looks_like_formula(formula)
+
+
 def test_extract_formula():
     result = SimpleNamespace(json={"res": {"rec_formula": r"$x^2+y^2$"}})
     assert extract_formula(result) == "x^2+y^2"

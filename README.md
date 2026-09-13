@@ -37,6 +37,10 @@ The Nix package currently supports `x86_64-linux`. The Python package may work
 on other platforms supported by PaddlePaddle, but those configurations are not
 currently tested here.
 
+On NixOS, use the Nix package below or the provided devenv environment. A
+regular `python -m venv` followed by `pip install` can install manylinux wheels
+whose C/C++ libraries are not visible through NixOS library paths.
+
 ## Quick start with Nix
 
 Run directly from the GitHub flake:
@@ -47,7 +51,8 @@ nix run github:dragonleopardpig/formulaocr-offline -- formula.png
 
 The first Nix build downloads and verifies the pinned official model archive.
 The completed package contains an immutable model path, and recognition makes
-no network requests.
+no network requests. Do not create or activate a Python virtual environment for
+this installation method, and do not separately download the model.
 
 To install the command in a Nix profile:
 
@@ -56,11 +61,38 @@ nix profile install github:dragonleopardpig/formulaocr-offline
 formulaocr-offline formula.png
 ```
 
-## General installation without Nix
+## Source checkout on NixOS with devenv
+
+The repository includes a devenv configuration for developing or running the
+Python installation on NixOS. It uses Python 3.12, enables manylinux library
+compatibility for binary wheels, installs all runtime and development extras
+with `uv`, and provides the pinned model through the Nix store.
+
+```console
+git clone https://github.com/dragonleopardpig/formulaocr-offline.git
+cd formulaocr-offline
+devenv shell
+formulaocr-offline --version
+formulaocr-offline --download-model
+```
+
+The final command verifies the configured model and prints its Nix store path;
+it does not download a second copy into `~/.paddlex`. The first `devenv shell`
+can take several minutes because it installs the Python inference dependencies.
+The environment and virtual environment state live under `.devenv`; remove
+that directory if the checkout no longer needs its local environment state.
+
+For ordinary use rather than source development, prefer the Nix package from
+the previous section. Install devenv by following its
+[official installation instructions](https://devenv.sh/getting-started/).
+
+## General installation on non-Nix Linux
 
 The project is not currently published on PyPI and does not provide prebuilt
 GitHub release binaries. Install it from this repository in an isolated Python
-virtual environment.
+virtual environment. These instructions target conventional distributions such
+as Debian, Ubuntu, Fedora, and Arch Linux; they are not the NixOS installation
+instructions.
 
 ### 1. Install system prerequisites
 
@@ -69,19 +101,19 @@ on Debian or Ubuntu:
 
 ```console
 sudo apt update
-sudo apt install git python3 python3-pip python3-venv
+sudo apt install curl git libgl1 libglib2.0-0 libstdc++6 python3 python3-pip python3-venv
 ```
 
 On Fedora:
 
 ```console
-sudo dnf install git python3 python3-pip
+sudo dnf install curl git glib2 libglvnd-glx libstdc++ python3 python3-pip
 ```
 
 On Arch Linux:
 
 ```console
-sudo pacman -S git python
+sudo pacman -S curl gcc-libs git glib2 libglvnd python
 ```
 
 ### 2. Clone the project and create a virtual environment
@@ -335,6 +367,30 @@ cloned project directory, run:
 python -m pip install '.[runtime]'
 ```
 
+### NumPy cannot find `libstdc++.so.6` or another shared library
+
+Read the last `Original error was:` line first. NumPy may follow a missing
+shared-library error with a generic and misleading warning about importing from
+its source directory.
+
+On NixOS, deactivate the ordinary virtual environment and use either the Nix
+package or the repository's devenv environment:
+
+```console
+deactivate 2>/dev/null || true
+hash -r
+nix run github:dragonleopardpig/formulaocr-offline -- formula.png
+
+# For a source checkout instead:
+devenv shell
+formulaocr-offline --download-model
+```
+
+On Debian, Ubuntu, Fedora, or Arch Linux, install the native runtime packages
+listed in the prerequisites above, then reactivate or recreate the virtual
+environment. Avoid fixing this by globally setting `LD_LIBRARY_PATH`; it can
+make unrelated programs load incompatible libraries.
+
 ### `No matching distribution found for paddlepaddle`
 
 Confirm that Python is version 3.10 through 3.13 and that the platform is
@@ -384,6 +440,18 @@ models and packages may use different licenses; users should review those terms
 before downloading, modifying, or redistributing them.
 
 ## Development
+
+The devenv shell includes the complete pip/uv runtime and the pinned model:
+
+```console
+devenv shell
+python -m pytest
+ruff check .
+formulaocr-offline formula.png
+```
+
+The lighter Nix development shell is sufficient for unit tests and linting and
+does not install the mutable pip runtime:
 
 ```console
 nix develop

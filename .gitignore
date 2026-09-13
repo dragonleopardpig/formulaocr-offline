@@ -1,6 +1,10 @@
+.devenv/
+.devenv.flake.nix
+.direnv/
 __pycache__/
 *.egg-info/
 *.pyc
 .pytest_cache/
 .ruff_cache/
+build/
 result

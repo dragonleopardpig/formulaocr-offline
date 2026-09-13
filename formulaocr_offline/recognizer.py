@@ -118,8 +118,14 @@ def looks_like_formula(image: str | os.PathLike[str] | Image.Image) -> bool:
     if pixels.shape[0] < 8 or pixels.shape[1] < 8:
         return False
 
+    edge_width = max(1, min(pixels.shape[:2]) // 20)
     border = np.concatenate(
-        (pixels[0], pixels[-1], pixels[:, 0], pixels[:, -1]),
+        (
+            pixels[:edge_width].reshape(-1, 3),
+            pixels[-edge_width:].reshape(-1, 3),
+            pixels[:, :edge_width].reshape(-1, 3),
+            pixels[:, -edge_width:].reshape(-1, 3),
+        ),
         axis=0,
     )
     background = np.median(border, axis=0)
