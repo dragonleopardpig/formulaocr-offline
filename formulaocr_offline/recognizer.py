@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageOps
 
 MODEL_NAME = "PP-FormulaNet_plus-L"
 MODEL_FILENAMES = ("inference.json", "inference.pdiparams", "inference.yml")
@@ -105,42 +105,88 @@ def validate_formula(source: str) -> str:
     return formula
 
 
-def looks_like_formula(image: str | os.PathLike[str] | Image.Image) -> bool:
-    """Conservatively distinguish a formula crop from a normal image."""
+def _border_pixels(pixels: np.ndarray) -> np.ndarray:
+    edge_width = max(1, min(pixels.shape[:2]) // 20)
+    channels = pixels.shape[2]
+    return np.concatenate(
+        (
+            pixels[:edge_width].reshape(-1, channels),
+            pixels[-edge_width:].reshape(-1, channels),
+            pixels[:, :edge_width].reshape(-1, channels),
+            pixels[:, -edge_width:].reshape(-1, channels),
+        ),
+        axis=0,
+    )
+
+
+def prepare_formula_image(image: str | os.PathLike[str] | Image.Image) -> Image.Image:
+    """Normalize formula contrast across colored, shaded and transparent backgrounds."""
     if isinstance(image, Image.Image):
-        picture = image.convert("RGB")
+        picture = ImageOps.exif_transpose(image).convert("RGBA")
     else:
         with Image.open(image) as opened:
-            picture = opened.convert("RGB")
+            picture = ImageOps.exif_transpose(opened).convert("RGBA")
+
+    pixels = np.asarray(picture)
+    border = _border_pixels(pixels)
+    visible_border = border[border[:, 3] >= 128, :3]
+    if visible_border.size:
+        background_color = tuple(np.median(visible_border, axis=0).astype(int))
+    else:
+        foreground = pixels[pixels[:, :, 3] > 0, :3]
+        light_foreground = (
+            bool(foreground.size) and float(np.median(foreground, axis=0).mean()) > 128
+        )
+        background_color = (0, 0, 0) if light_foreground else (255, 255, 255)
+
+    background = Image.new("RGBA", picture.size, background_color)
+    colors = Image.alpha_composite(background, picture).convert("RGB")
+    pixels = np.asarray(colors, dtype=np.float32)
+    edge_width = max(1, min(pixels.shape[:2]) // 20)
+    row_background = np.median(
+        np.concatenate((pixels[:, :edge_width], pixels[:, -edge_width:]), axis=1),
+        axis=1,
+    )
+    column_background = np.median(
+        np.concatenate((pixels[:edge_width], pixels[-edge_width:]), axis=0),
+        axis=0,
+    )
+    background_pixels = np.clip(
+        row_background[:, None]
+        + column_background[None, :]
+        - np.median(_border_pixels(pixels), axis=0),
+        0,
+        255,
+    )
+    contrast = np.max(np.abs(pixels - background_pixels), axis=2)
+    foreground_contrast = contrast[contrast > 2]
+    if not foreground_contrast.size:
+        return Image.new("RGB", picture.size, "white")
+    scale = float(np.percentile(foreground_contrast, 99))
+    normalized = np.rint(255 * (1 - np.clip(contrast / scale, 0, 1))).astype(np.uint8)
+    return Image.fromarray(normalized).convert("RGB")
+
+
+def looks_like_formula(image: str | os.PathLike[str] | Image.Image) -> bool:
+    """Conservatively distinguish a formula crop from a normal image."""
+    return _has_formula_contrast(prepare_formula_image(image))
+
+
+def _has_formula_contrast(picture: Image.Image) -> bool:
+    picture = picture.copy()
     picture.thumbnail((2048, 2048), Image.Resampling.LANCZOS)
     pixels = np.asarray(picture, dtype=np.float32)
 
     if pixels.shape[0] < 8 or pixels.shape[1] < 8:
         return False
 
-    edge_width = max(1, min(pixels.shape[:2]) // 20)
-    border = np.concatenate(
-        (
-            pixels[:edge_width].reshape(-1, 3),
-            pixels[-edge_width:].reshape(-1, 3),
-            pixels[:, :edge_width].reshape(-1, 3),
-            pixels[:, -edge_width:].reshape(-1, 3),
-        ),
-        axis=0,
-    )
-    background = np.median(border, axis=0)
+    background = np.median(_border_pixels(pixels), axis=0)
     gray = pixels.mean(axis=2)
     contrast = np.abs(gray - float(background.mean()))
     ink_density = float(np.mean(contrast > 35.0))
     background_share = float(np.mean(contrast < 20.0))
-    color_spread = np.ptp(pixels, axis=2)
 
-    return (
-        0.001 <= ink_density <= 0.50
-        and background_share >= 0.45
-        and float(np.percentile(contrast, 99)) >= 60.0
-        and float(np.percentile(color_spread, 95)) <= 45.0
-    )
+    return 0.001 <= ink_density <= 0.50 and background_share >= 0.45
 
 
 def extract_formula(result: Any) -> str:
@@ -192,8 +238,7 @@ class OfflineFormulaOCR:
         if device == "auto":
             device = (
                 "gpu"
-                if paddle.device.is_compiled_with_cuda()
-                and paddle.device.cuda.device_count() > 0
+                if paddle.device.is_compiled_with_cuda() and paddle.device.cuda.device_count() > 0
                 else "cpu"
             )
         if device not in {"cpu", "gpu"}:
@@ -218,10 +263,15 @@ class OfflineFormulaOCR:
         image_path = Path(image).expanduser()
         if not image_path.is_file():
             raise FormulaRecognitionError(f"Image does not exist: {image_path}")
-        if classify and not looks_like_formula(image_path):
+        try:
+            picture = prepare_formula_image(image_path)
+        except (OSError, ValueError) as error:
+            raise FormulaRecognitionError(f"Unable to read formula image: {error}") from error
+        if classify and not _has_formula_contrast(picture):
             raise FormulaRecognitionError("The image does not look like a formula crop")
         try:
-            results = self._model.predict(input=str(image_path.resolve()), batch_size=1)
+            pixels = np.asarray(picture)[:, :, ::-1].copy()
+            results = self._model.predict(input=pixels, batch_size=1)
         except Exception as error:
             raise FormulaRecognitionError(f"Formula recognition failed: {error}") from error
         if len(results) != 1:

@@ -14,6 +14,8 @@ service, training dependencies, or a mutable development environment.
 
 - Runs inference locally after the one-time installation and model download.
 - Accepts PNG, JPEG, and other image formats supported by Pillow.
+- Automatically handles dark mode, colored text and backgrounds, gradients,
+  and transparent formula images.
 - Returns plain LaTeX suitable for scripts and editor integrations.
 - Can wrap output in Minder's `$$...$$` delimiters.
 - Can copy output to a Wayland clipboard with `wl-copy`.
@@ -22,8 +24,16 @@ service, training dependencies, or a mutable development environment.
 - Refuses to download a model implicitly during normal recognition.
 
 For best results, provide a tightly cropped image containing one formula on a
-plain, high-contrast background. OCR output should still be reviewed before it
-is used in a publication or calculation.
+plain background with some margin around the expression. Before inference,
+the recognizer estimates the background from the image edges and converts
+foreground color contrast into dark strokes on white. This handles light and
+dark themes, tinted backgrounds, colored formulas, low contrast, and smooth
+horizontal or vertical gradients while preserving antialiasing. Transparent
+images are composited against a background that keeps their text visible.
+The source image is unchanged. Preprocessing also applies with `--no-classify`
+and in worker mode. Textured backgrounds and margins containing other content
+can still confuse background estimation. OCR output should be reviewed before
+it is used in a publication or calculation.
 
 ## Requirements
 
