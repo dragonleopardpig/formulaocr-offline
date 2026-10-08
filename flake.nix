@@ -20,6 +20,7 @@
           numpy
           pillow
           pytest
+          pyyaml
         ]
       );
     in

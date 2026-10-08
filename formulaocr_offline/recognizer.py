@@ -6,6 +6,8 @@ import logging
 import os
 import re
 import warnings
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +17,10 @@ from PIL import Image, ImageOps
 MODEL_NAME = "PP-FormulaNet_plus-L"
 MODEL_FILENAMES = ("inference.json", "inference.pdiparams", "inference.yml")
 MAX_FORMULA_LENGTH = 32_768
+
+# PP-FormulaNet runs no faster on more CPU threads than this, and PaddleX's own
+# default of 10 makes recognition several times slower when the machine is busy.
+MAX_CPU_THREADS = 4
 
 # Background estimation: pixels sampled, trial planes drawn, and the color
 # difference (in 8-bit levels) below which a pixel still counts as background.
@@ -236,6 +242,37 @@ def _quiet_inference_dependencies() -> None:
     logging.getLogger("paddlex").setLevel(logging.ERROR)
 
 
+@contextmanager
+def _fast_config_parsing() -> Iterator[None]:
+    """Let PaddleX parse the model configuration with libyaml when it can.
+
+    PaddleX reads the 100,000-line ``inference.yml`` through PyYAML's pure-Python
+    ``FullLoader``, which costs several seconds on every start. ``CFullLoader``
+    builds the same objects with the C parser.
+    """
+    try:
+        import yaml
+
+        fast_loader = yaml.CFullLoader
+    except (ImportError, AttributeError):
+        yield
+        return
+    python_loader, yaml.FullLoader = yaml.FullLoader, fast_loader
+    try:
+        yield
+    finally:
+        yaml.FullLoader = python_loader
+
+
+def _default_cpu_threads() -> int:
+    """Return the CPU inference thread count used when none is requested."""
+    try:
+        usable = len(os.sched_getaffinity(0))
+    except AttributeError:
+        usable = os.cpu_count() or 1
+    return max(1, min(MAX_CPU_THREADS, usable))
+
+
 class OfflineFormulaOCR:
     """PP-FormulaNet wrapper that cannot download during recognition."""
 
@@ -243,8 +280,13 @@ class OfflineFormulaOCR:
         self,
         model_dir: str | os.PathLike[str] | None = None,
         device: str = "auto",
+        cpu_threads: int | None = None,
     ) -> None:
         local_model = require_model_dir(model_dir)
+        if cpu_threads is None:
+            cpu_threads = _default_cpu_threads()
+        if cpu_threads < 1:
+            raise FormulaRecognitionError("The CPU thread count must be at least 1")
         os.environ["PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK"] = "True"
         _quiet_inference_dependencies()
 
@@ -268,11 +310,13 @@ class OfflineFormulaOCR:
             raise FormulaRecognitionError(f"Unsupported inference device: {device}")
 
         try:
-            self._model = FormulaRecognition(
-                model_name=MODEL_NAME,
-                model_dir=str(local_model),
-                device=device,
-            )
+            with _fast_config_parsing():
+                self._model = FormulaRecognition(
+                    model_name=MODEL_NAME,
+                    model_dir=str(local_model),
+                    device=device,
+                    cpu_threads=cpu_threads,
+                )
         except Exception as error:
             raise FormulaRecognitionError(f"Unable to load the offline model: {error}") from error
 

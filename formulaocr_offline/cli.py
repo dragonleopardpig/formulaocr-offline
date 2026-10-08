@@ -11,6 +11,7 @@ from pathlib import Path
 
 from . import __version__
 from .recognizer import (
+    MAX_CPU_THREADS,
     FormulaRecognitionError,
     OfflineFormulaOCR,
     download_model,
@@ -26,6 +27,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("--model-dir", type=Path, help="directory containing local model files")
     parser.add_argument("--device", choices=("auto", "cpu", "gpu"), default="auto")
+    parser.add_argument(
+        "--cpu-threads",
+        type=int,
+        metavar="N",
+        help=f"threads for CPU inference (default: up to {MAX_CPU_THREADS})",
+    )
     parser.add_argument(
         "--download-model",
         action="store_true",
@@ -88,7 +95,11 @@ def main(argv: list[str] | None = None) -> int:
         if args.image is None and not args.worker:
             raise FormulaRecognitionError("an image path or --worker is required")
 
-        model = OfflineFormulaOCR(model_dir=args.model_dir, device=args.device)
+        model = OfflineFormulaOCR(
+            model_dir=args.model_dir,
+            device=args.device,
+            cpu_threads=args.cpu_threads,
+        )
         if args.worker:
             return _serve_worker(model, classify=not args.no_classify)
 

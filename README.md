@@ -239,11 +239,27 @@ formulaocr-offline --device gpu formula.png
 # Use an explicitly installed model directory.
 formulaocr-offline --model-dir /path/to/model formula.png
 
+# Change the number of CPU inference threads (default: up to 4).
+formulaocr-offline --cpu-threads 2 formula.png
+
 # Bypass the conservative formula-image classifier after a false rejection.
 formulaocr-offline --no-classify formula.png
 ```
 
 Run `formulaocr-offline --help` for the complete option list.
+
+### Speed
+
+Each invocation starts Python, loads the model, and recognizes one image. On
+an 8-core desktop CPU that takes about 11 seconds for a one-line formula and
+about 17 seconds for a four-line aligned block; several other busy programs
+can double or triple that. Roughly 4 seconds are start-up, which
+[worker mode](#worker-mode) pays only once. The rest is inference, the part
+that a [GPU](#gpu-installation) accelerates.
+
+CPU inference uses at most 4 threads. `PP-FormulaNet_plus-L` is no faster with
+more, and a larger thread pool makes recognition several times slower when
+other programs compete for the processor. `--cpu-threads` overrides the count.
 
 ### Clipboard output
 
@@ -317,7 +333,7 @@ The executable contract expected by Minder is:
    `$$`, `\\(`, or `\\[` delimiters.
 3. Write diagnostics to standard error, not standard output.
 4. Exit with status 0 on success and a nonzero status on failure.
-5. Finish within 30 seconds and return no more than 32 KiB of output.
+5. Finish within 120 seconds and return no more than 32 KiB of output.
 
 If another recognizer needs different arguments or produces JSON, place a
 small adapter script in front of it and point Minder to that script:

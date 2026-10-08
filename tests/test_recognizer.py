@@ -1,3 +1,5 @@
+import os
+import sys
 from types import SimpleNamespace
 
 import numpy as np
@@ -307,3 +309,72 @@ def test_recognize_reports_invalid_image(tmp_path):
 def test_extract_formula():
     result = SimpleNamespace(json={"res": {"rec_formula": r"$x^2+y^2$"}})
     assert extract_formula(result) == "x^2+y^2"
+
+
+@pytest.fixture
+def loaded_models(tmp_path, monkeypatch):
+    """Stand in for the inference runtime and record how each model is loaded."""
+    loaded = []
+
+    def load(**options):
+        loaded.append(options)
+        return SimpleNamespace()
+
+    cuda = SimpleNamespace(device_count=lambda: 0)
+    device = SimpleNamespace(is_compiled_with_cuda=lambda: False, cuda=cuda)
+    monkeypatch.setitem(sys.modules, "paddle", SimpleNamespace(device=device))
+    monkeypatch.setitem(sys.modules, "paddleocr", SimpleNamespace(FormulaRecognition=load))
+    monkeypatch.setenv("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
+    for name in ("inference.json", "inference.pdiparams", "inference.yml"):
+        (tmp_path / name).touch()
+    return loaded
+
+
+@pytest.mark.parametrize(("usable_cpus", "expected"), [(16, 4), (2, 2), (1, 1)])
+def test_cpu_inference_threads_are_capped_by_default(
+    tmp_path, monkeypatch, loaded_models, usable_cpus, expected
+):
+    monkeypatch.setattr(
+        os, "sched_getaffinity", lambda _pid: set(range(usable_cpus)), raising=False
+    )
+
+    OfflineFormulaOCR(model_dir=tmp_path)
+
+    assert loaded_models[0]["device"] == "cpu"
+    assert loaded_models[0]["cpu_threads"] == expected
+
+
+def test_cpu_inference_threads_can_be_requested(tmp_path, loaded_models):
+    OfflineFormulaOCR(model_dir=tmp_path, cpu_threads=6)
+    assert loaded_models[0]["cpu_threads"] == 6
+
+    with pytest.raises(FormulaRecognitionError, match="at least 1"):
+        OfflineFormulaOCR(model_dir=tmp_path, cpu_threads=0)
+    assert len(loaded_models) == 1
+
+
+@pytest.mark.parametrize("loads", [True, False])
+def test_model_configuration_is_parsed_with_libyaml(tmp_path, monkeypatch, loaded_models, loads):
+    yaml = pytest.importorskip("yaml")
+    if not hasattr(yaml, "CFullLoader"):
+        pytest.skip("PyYAML was built without libyaml")
+    python_loader = yaml.FullLoader
+    loaders = []
+
+    def load(**options):
+        # PaddleX reads inference.yml with whatever yaml.FullLoader is right now.
+        loaders.append(yaml.FullLoader)
+        if not loads:
+            raise RuntimeError("broken model")
+        return SimpleNamespace()
+
+    monkeypatch.setitem(sys.modules, "paddleocr", SimpleNamespace(FormulaRecognition=load))
+
+    if loads:
+        OfflineFormulaOCR(model_dir=tmp_path)
+    else:
+        with pytest.raises(FormulaRecognitionError, match="broken model"):
+            OfflineFormulaOCR(model_dir=tmp_path)
+
+    assert loaders == [yaml.CFullLoader]
+    assert yaml.FullLoader is python_loader
