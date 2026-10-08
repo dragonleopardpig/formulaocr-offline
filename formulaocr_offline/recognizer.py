@@ -34,6 +34,9 @@ _FORBIDDEN_COMMANDS = re.compile(
 )
 _ENVIRONMENT = re.compile(r"\\(begin|end)\s*\{([^{}]+)\}")
 
+# Decoder output on which a broken spacing cleanup shows itself, see _keep_required_spaces.
+_SPACING_PROBE = r"\mathbf { v \times B } = \partial A"
+
 
 class FormulaRecognitionError(RuntimeError):
     """Raised when an image cannot safely be converted to a formula."""
@@ -232,6 +235,43 @@ def extract_formula(result: Any) -> str:
     return validate_formula(source)
 
 
+def tidy_token_spacing(source: str) -> str:
+    """Remove the spaces a decoder leaves between tokens, keeping those TeX needs.
+
+    Only a space between two letters survives, because joining them would change
+    the meaning: ``\\partial A`` is not ``\\partialA``.
+    """
+    letter, other = "[a-zA-Z]", r"[\W_^\d]"
+    formula = source
+    while True:
+        tidied = re.sub(rf"(?!\\ )({other})\s+?({other})", r"\1\2", formula)
+        tidied = re.sub(rf"(?!\\ )({other})\s+?({letter})", r"\1\2", tidied)
+        tidied = re.sub(rf"({letter})\s+?({other})", r"\1\2", tidied)
+        if tidied == formula:
+            return formula
+        formula = tidied
+
+
+def _keep_required_spaces(model: Any) -> None:
+    """Replace PaddleX's spacing cleanup when it glues commands to letters.
+
+    PaddleX deletes every space in a formula as soon as a ``\\mathbf{...}`` group
+    holds a command followed by a letter, which turns ``\\partial A`` elsewhere in
+    the formula into the undefined ``\\partialA``. A PaddleX without that fault,
+    or with a different decoder, is left alone.
+    """
+    decoder = getattr(getattr(model, "paddlex_predictor", None), "post_op", None)
+    cleanup = getattr(decoder, "normalize", None)
+    if not callable(cleanup):
+        return
+    try:
+        glued = r"\partialA" in cleanup(_SPACING_PROBE)
+    except Exception:
+        return
+    if glued:
+        decoder.normalize = tidy_token_spacing
+
+
 def _quiet_inference_dependencies() -> None:
     """Keep stdout machine-readable and hide irrelevant inference warnings."""
     warnings.filterwarnings(
@@ -319,6 +359,7 @@ class OfflineFormulaOCR:
                 )
         except Exception as error:
             raise FormulaRecognitionError(f"Unable to load the offline model: {error}") from error
+        _keep_required_spaces(self._model)
 
     def recognize(
         self,

@@ -14,6 +14,7 @@ from formulaocr_offline.recognizer import (
     normalize_formula,
     prepare_formula_image,
     require_model_dir,
+    tidy_token_spacing,
     validate_formula,
 )
 
@@ -378,3 +379,69 @@ def test_model_configuration_is_parsed_with_libyaml(tmp_path, monkeypatch, loade
 
     assert loaders == [yaml.CFullLoader]
     assert yaml.FullLoader is python_loader
+
+
+def test_token_spacing_keeps_a_command_apart_from_the_letter_after_it():
+    decoded = (
+        r"\mathbf { \nabla \times A } = \left( \frac { 1 } { r } "
+        r"\frac { \partial A _ { z } } { \partial \theta } - "
+        r"\frac { \partial A _ { \theta } } { \partial z } \right) \mathbf { r }"
+    )
+
+    assert tidy_token_spacing(decoded) == (
+        r"\mathbf{\nabla\times A}=\left(\frac{1}{r}"
+        r"\frac{\partial A_{z}}{\partial\theta}-"
+        r"\frac{\partial A_{\theta}}{\partial z}\right)\mathbf{r}"
+    )
+
+
+@pytest.mark.parametrize(
+    ("decoded", "tidy"),
+    [
+        (
+            r"\mathbf { A } = A _ { x } \mathbf { i } + A _ { y } \mathbf { j }",
+            r"\mathbf{A}=A_{x}\mathbf{i}+A_{y}\mathbf{j}",
+        ),
+        (
+            r"\int _ { 0 } ^ { \infty } e ^ { - x ^ { 2 } }   d x = { \frac { \pi } { 2 } }",
+            r"\int_{0}^{\infty}e^{-x^{2}}d x={\frac{\pi}{2}}",
+        ),
+        (r"a \ b \, c \\ d", r"a\ b\,c\\ d"),
+    ],
+)
+def test_token_spacing_removes_the_spaces_between_tokens(decoded, tidy):
+    assert tidy_token_spacing(decoded) == tidy
+
+
+def _model_with_cleanup(monkeypatch, cleanup):
+    decoder = SimpleNamespace(normalize=cleanup)
+    model = SimpleNamespace(paddlex_predictor=SimpleNamespace(post_op=decoder))
+    runtime = SimpleNamespace(FormulaRecognition=lambda **options: model)
+    monkeypatch.setitem(sys.modules, "paddleocr", runtime)
+    return decoder
+
+
+def test_spacing_cleanup_that_glues_commands_to_letters_is_replaced(
+    tmp_path, monkeypatch, loaded_models
+):
+    # PaddleX 3.4 strips every space once a \mathbf group holds a command and a letter.
+    decoder = _model_with_cleanup(monkeypatch, lambda decoded: decoded.replace(" ", ""))
+
+    OfflineFormulaOCR(model_dir=tmp_path)
+
+    assert decoder.normalize(r"\frac { \partial A } { \partial z }") == (
+        r"\frac{\partial A}{\partial z}"
+    )
+
+
+def test_sound_spacing_cleanup_is_left_alone(tmp_path, monkeypatch, loaded_models):
+    def sound(decoded):
+        return tidy_token_spacing(decoded)
+
+    def failing(decoded):
+        raise ValueError(decoded)
+
+    for cleanup in (sound, failing):
+        decoder = _model_with_cleanup(monkeypatch, cleanup)
+        OfflineFormulaOCR(model_dir=tmp_path)
+        assert decoder.normalize is cleanup
