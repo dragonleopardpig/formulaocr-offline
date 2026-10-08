@@ -24,16 +24,17 @@ service, training dependencies, or a mutable development environment.
 - Refuses to download a model implicitly during normal recognition.
 
 For best results, provide a tightly cropped image containing one formula on a
-plain background with some margin around the expression. Before inference,
-the recognizer estimates the background from the image edges and converts
-foreground color contrast into dark strokes on white. This handles light and
-dark themes, tinted backgrounds, colored formulas, low contrast, and smooth
-horizontal or vertical gradients while preserving antialiasing. Transparent
-images are composited against a background that keeps their text visible.
-The source image is unchanged. Preprocessing also applies with `--no-classify`
-and in worker mode. Textured backgrounds and margins containing other content
-can still confuse background estimation. OCR output should be reviewed before
-it is used in a publication or calculation.
+plain background. A margin around the expression is not required: the crop may
+cut right up to the ink. Before inference, the recognizer takes the flat color
+or linear gradient that most of the image lies on as the background and
+converts foreground color contrast into dark strokes on white. This handles
+light and dark themes, tinted backgrounds, colored formulas, low contrast, and
+linear gradients while preserving antialiasing. Transparent images are
+composited against a background that keeps their text visible. The source
+image is unchanged. Preprocessing also applies with `--no-classify` and in
+worker mode. Textured backgrounds, and images in which the formula covers more
+than half of the picture, can still confuse background estimation. OCR output
+should be reviewed before it is used in a publication or calculation.
 
 ## Requirements
 

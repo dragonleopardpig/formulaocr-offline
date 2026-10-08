@@ -154,6 +154,87 @@ def test_prepare_formula_image_handles_gradient_background(with_formula):
         assert prepared.getpixel((50, 50))[0] < 80
 
 
+def _draw_tight_crop(draw, ink):
+    """Draw a formula cropped with no margin, so ink touches every image edge."""
+    draw.rectangle((0, 20, 5, 80), fill=ink)  # delimiter against the left edge
+    draw.rectangle((294, 10, 299, 40), fill=ink)  # superscript against the right edge
+    draw.rectangle((0, 48, 299, 51), fill=ink)  # fraction bar across the full width
+    draw.rectangle((140, 0, 160, 30), fill=ink)  # glyph against the top edge
+    draw.rectangle((100, 70, 120, 99), fill=ink)  # glyph against the bottom edge
+
+
+def _tight_crop_strokes():
+    strokes = Image.new("RGB", (300, 100), "white")
+    _draw_tight_crop(ImageDraw.Draw(strokes), "black")
+    return np.asarray(strokes)
+
+
+@pytest.mark.parametrize(
+    ("background", "ink"),
+    [
+        ((255, 255, 255), (0, 0, 0)),
+        ((30, 30, 30), (212, 212, 212)),
+        ((250, 240, 210), (20, 60, 180)),
+    ],
+)
+def test_prepare_formula_image_handles_ink_touching_the_edges(background, ink):
+    formula = Image.new("RGB", (300, 100), background)
+    _draw_tight_crop(ImageDraw.Draw(formula), ink)
+
+    np.testing.assert_array_equal(np.asarray(prepare_formula_image(formula)), _tight_crop_strokes())
+    assert looks_like_formula(formula)
+
+
+@pytest.mark.parametrize("ink", [(0, 0, 0), (255, 255, 255)])
+def test_prepare_formula_image_handles_tight_transparent_crop(ink):
+    formula = Image.new("RGBA", (300, 100), (0, 0, 0, 0))
+    _draw_tight_crop(ImageDraw.Draw(formula), (*ink, 255))
+
+    np.testing.assert_array_equal(np.asarray(prepare_formula_image(formula)), _tight_crop_strokes())
+    assert looks_like_formula(formula)
+
+
+def test_prepare_formula_image_handles_tight_crop_on_gradient():
+    coordinates = np.indices((100, 300), dtype=np.float32)
+    background = 35 + coordinates[0] * 0.5 + coordinates[1] * 0.3
+    pixels = np.stack((background, background + 20, background + 40), axis=2).astype(np.uint8)
+    formula = Image.fromarray(pixels)
+    _draw_tight_crop(ImageDraw.Draw(formula), (240, 220, 180))
+
+    prepared = np.asarray(prepare_formula_image(formula))[:, :, 0]
+
+    assert prepared[_tight_crop_strokes()[:, :, 0] == 255].min() >= 250
+    assert prepared[50, 2] < 80
+    assert prepared[49, 150] < 128
+    assert looks_like_formula(formula)
+
+
+def test_prepare_formula_image_ignores_frame_around_small_capture():
+    formula = Image.new("RGB", (120, 30), (36, 36, 38))
+    draw = ImageDraw.Draw(formula)
+    draw.rectangle((0, 0, 119, 29), outline=(180, 180, 180))
+    draw.rectangle((20, 10, 100, 20), fill=(230, 230, 230))
+
+    prepared = prepare_formula_image(formula)
+
+    assert prepared.getpixel((10, 5)) == (255, 255, 255)
+    assert prepared.getpixel((50, 15)) == (0, 0, 0)
+    assert looks_like_formula(formula)
+
+
+def test_prepare_formula_image_fills_transparent_corners_with_background():
+    formula = Image.new("RGBA", (300, 100), (36, 36, 38, 255))
+    draw = ImageDraw.Draw(formula)
+    draw.rectangle((40, 35, 260, 65), fill=(230, 230, 230, 255))
+    for left, top in ((0, 0), (292, 0), (0, 92), (292, 92)):
+        draw.rectangle((left, top, left + 7, top + 7), fill=(0, 0, 0, 0))
+
+    prepared = prepare_formula_image(formula)
+
+    assert prepared.getpixel((0, 0)) == (255, 255, 255)
+    assert prepared.getpixel((50, 50)) == (0, 0, 0)
+
+
 def test_prepare_formula_image_handles_jpeg_compression(tmp_path):
     formula = Image.new("RGB", (300, 100), (20, 40, 70))
     ImageDraw.Draw(formula).rectangle((40, 35, 260, 65), fill=(240, 200, 120))

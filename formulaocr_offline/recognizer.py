@@ -16,6 +16,12 @@ MODEL_NAME = "PP-FormulaNet_plus-L"
 MODEL_FILENAMES = ("inference.json", "inference.pdiparams", "inference.yml")
 MAX_FORMULA_LENGTH = 32_768
 
+# Background estimation: pixels sampled, trial planes drawn, and the color
+# difference (in 8-bit levels) below which a pixel still counts as background.
+_BACKGROUND_SAMPLES = 4096
+_BACKGROUND_TRIALS = 256
+_BACKGROUND_TOLERANCE = 2.0
+
 _FORBIDDEN_COMMANDS = re.compile(
     r"\\(?:catcode|csname|documentclass|include|input|openin|openout|read|usepackage|write)\b",
     re.IGNORECASE,
@@ -105,18 +111,63 @@ def validate_formula(source: str) -> str:
     return formula
 
 
-def _border_pixels(pixels: np.ndarray) -> np.ndarray:
-    edge_width = max(1, min(pixels.shape[:2]) // 20)
-    channels = pixels.shape[2]
-    return np.concatenate(
-        (
-            pixels[:edge_width].reshape(-1, channels),
-            pixels[-edge_width:].reshape(-1, channels),
-            pixels[:, :edge_width].reshape(-1, channels),
-            pixels[:, -edge_width:].reshape(-1, channels),
-        ),
-        axis=0,
+def _sheet_color(pixels: np.ndarray) -> tuple[int, int, int]:
+    """Choose the color laid behind the transparent pixels of an RGBA image."""
+    alpha = pixels[:, :, 3]
+    opaque = alpha >= 128
+    if 2 * np.count_nonzero(opaque) >= opaque.size:
+        # A mostly opaque picture: stray transparent pixels take its own background.
+        color = np.median(pixels[opaque, :3], axis=0)
+        return tuple(int(value) for value in color)
+    # Ink on a transparent sheet: lay a contrasting sheet behind it.
+    ink = pixels[alpha > 0, :3]
+    light_ink = bool(ink.size) and float(np.median(ink, axis=0).mean()) > 128
+    return (0, 0, 0) if light_ink else (255, 255, 255)
+
+
+def _fit_background(pixels: np.ndarray) -> np.ndarray:
+    """Return the flat color or linear gradient that most of an RGB image lies on.
+
+    The image edges are not assumed to be background: in a tight crop the ink
+    touches them. The plane is the least-median-of-residuals fit over the whole
+    picture, which stays on the background while ink covers less than half of it.
+    """
+    height, width = pixels.shape[:2]
+    step = max(1, int(np.ceil(np.sqrt(height * width / _BACKGROUND_SAMPLES))))
+    rows, columns = np.meshgrid(
+        np.arange(min(step // 2, height - 1), height, step),
+        np.arange(min(step // 2, width - 1), width, step),
+        indexing="ij",
     )
+    samples = pixels[rows, columns].reshape(-1, 3)
+    design = np.stack(
+        (np.ones(rows.size), rows.ravel() / height, columns.ravel() / width),
+        axis=1,
+    ).astype(np.float32)
+
+    def residuals(planes: np.ndarray) -> np.ndarray:
+        return np.abs(design @ planes - samples).max(axis=-1)
+
+    flat = np.zeros((1, 3, 3), dtype=np.float32)
+    flat[0, 0] = np.median(samples, axis=0)
+    picks = np.random.default_rng(0).integers(0, len(samples), (_BACKGROUND_TRIALS, 3))
+    tilted = np.linalg.pinv(design[picks]) @ samples[picks]
+    candidates = np.concatenate((flat, tilted))
+    candidate_residuals = residuals(candidates)
+    best = int(np.argmin(np.median(candidate_residuals, axis=1)))
+    plane, residual = candidates[best], candidate_residuals[best]
+
+    for _ in range(2):
+        # Keep what lies within 2.5 standard deviations, judged by the median residual.
+        spread = 2.5 * 1.4826 * float(np.median(residual))
+        inliers = residual <= max(_BACKGROUND_TOLERANCE, spread)
+        plane = np.linalg.lstsq(design[inliers], samples[inliers], rcond=None)[0]
+        plane[0] += np.median((samples - design @ plane)[inliers], axis=0)
+        residual = residuals(plane)
+
+    row_share = np.arange(height, dtype=np.float32)[:, None, None] / height
+    column_share = np.arange(width, dtype=np.float32)[None, :, None] / width
+    return np.clip(plane[0] + row_share * plane[1] + column_share * plane[2], 0, 255)
 
 
 def prepare_formula_image(image: str | os.PathLike[str] | Image.Image) -> Image.Image:
@@ -127,39 +178,11 @@ def prepare_formula_image(image: str | os.PathLike[str] | Image.Image) -> Image.
         with Image.open(image) as opened:
             picture = ImageOps.exif_transpose(opened).convert("RGBA")
 
-    pixels = np.asarray(picture)
-    border = _border_pixels(pixels)
-    visible_border = border[border[:, 3] >= 128, :3]
-    if visible_border.size:
-        background_color = tuple(np.median(visible_border, axis=0).astype(int))
-    else:
-        foreground = pixels[pixels[:, :, 3] > 0, :3]
-        light_foreground = (
-            bool(foreground.size) and float(np.median(foreground, axis=0).mean()) > 128
-        )
-        background_color = (0, 0, 0) if light_foreground else (255, 255, 255)
-
-    background = Image.new("RGBA", picture.size, background_color)
-    colors = Image.alpha_composite(background, picture).convert("RGB")
+    sheet = Image.new("RGBA", picture.size, _sheet_color(np.asarray(picture)))
+    colors = Image.alpha_composite(sheet, picture).convert("RGB")
     pixels = np.asarray(colors, dtype=np.float32)
-    edge_width = max(1, min(pixels.shape[:2]) // 20)
-    row_background = np.median(
-        np.concatenate((pixels[:, :edge_width], pixels[:, -edge_width:]), axis=1),
-        axis=1,
-    )
-    column_background = np.median(
-        np.concatenate((pixels[:edge_width], pixels[-edge_width:]), axis=0),
-        axis=0,
-    )
-    background_pixels = np.clip(
-        row_background[:, None]
-        + column_background[None, :]
-        - np.median(_border_pixels(pixels), axis=0),
-        0,
-        255,
-    )
-    contrast = np.max(np.abs(pixels - background_pixels), axis=2)
-    foreground_contrast = contrast[contrast > 2]
+    contrast = np.max(np.abs(pixels - _fit_background(pixels)), axis=2)
+    foreground_contrast = contrast[contrast > _BACKGROUND_TOLERANCE]
     if not foreground_contrast.size:
         return Image.new("RGB", picture.size, "white")
     scale = float(np.percentile(foreground_contrast, 99))
@@ -173,6 +196,7 @@ def looks_like_formula(image: str | os.PathLike[str] | Image.Image) -> bool:
 
 
 def _has_formula_contrast(picture: Image.Image) -> bool:
+    """Judge a prepared image: ink against the background that fills most of it."""
     picture = picture.copy()
     picture.thumbnail((2048, 2048), Image.Resampling.LANCZOS)
     pixels = np.asarray(picture, dtype=np.float32)
@@ -180,9 +204,8 @@ def _has_formula_contrast(picture: Image.Image) -> bool:
     if pixels.shape[0] < 8 or pixels.shape[1] < 8:
         return False
 
-    background = np.median(_border_pixels(pixels), axis=0)
     gray = pixels.mean(axis=2)
-    contrast = np.abs(gray - float(background.mean()))
+    contrast = np.abs(gray - float(np.median(gray)))
     ink_density = float(np.mean(contrast > 35.0))
     background_share = float(np.mean(contrast < 20.0))
 
