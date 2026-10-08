@@ -68,7 +68,7 @@ stdenvNoCC.mkDerivation {
     cp -r formulaocr_offline $out/lib/formulaocr-offline/
 
     makeWrapper ${pythonEnvironment}/bin/python $out/bin/formulaocr-offline \
-      --add-flags "-m formulaocr_offline" \
+      --add-flags "-P -m formulaocr_offline" \
       --prefix PATH : ${
         lib.makeBinPath [
           ccache
@@ -89,6 +89,12 @@ stdenvNoCC.mkDerivation {
     test -f ${model}/inference.pdiparams
     test -f ${model}/inference.yml
     $out/bin/formulaocr-offline --help >/dev/null
+
+    # The command must run its installed code, whatever directory it starts in.
+    mkdir -p decoy/formulaocr_offline
+    echo 'raise SystemExit("imported from the working directory")' \
+      > decoy/formulaocr_offline/__init__.py
+    (cd decoy && $out/bin/formulaocr-offline --help >/dev/null)
   '';
 
   passthru = { inherit model; };
